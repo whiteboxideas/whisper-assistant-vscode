@@ -143,13 +143,17 @@ export async function toggleRecordingCommand(): Promise<void> {
           try {
             if (state.speechTranscription !== undefined) {
               const transcription: Transcription | undefined =
-                await state.speechTranscription.transcribeRecording();
+                await state.speechTranscription.processRecording();
 
               if (transcription) {
                 await vscode.env.clipboard.writeText(transcription.text);
-                await vscode.commands.executeCommand(
-                  'editor.action.clipboardPasteAction',
-                );
+                // await vscode.commands.executeCommand(
+                //   'editor.action.clipboardPasteAction',
+                // );
+                progress.report({
+                  increment: 0,
+                  message: transcription.text,
+                });
               }
             }
           } catch (error) {

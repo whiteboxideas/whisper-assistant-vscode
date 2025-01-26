@@ -38,6 +38,11 @@ const PROVIDER_MODELS: Record<ApiProvider, WhisperModel> = {
   localhost: 'whisper-1', // default to OpenAI model for localhost
 };
 
+interface CommandObject {
+  command: string;
+  args: (string | undefined)[];
+}
+
 class SpeechTranscription {
   private fileName: string = 'recording';
   private recordingProcess: ChildProcess | null = null;
@@ -129,7 +134,7 @@ class SpeechTranscription {
     this.recordingProcess = null;
   }
 
-  async transcribeRecording(): Promise<Transcription | undefined> {
+  async processRecording(): Promise<Transcription | undefined> {
     try {
       const config = vscode.workspace.getConfiguration('whisper-assistant');
       const provider = config.get<ApiProvider>('apiProvider') || 'openai';
@@ -152,24 +157,82 @@ class SpeechTranscription {
         response_format: 'verbose_json',
       });
 
-      // Then process through chat completion to interpret as command
-      const completion = await this.openai.chat.completions.create({
-        model: 'gpt-4o-mini',
-        messages: [
-          {
-            role: 'system',
-            content:
-              'Convert voice input to VS Code commands. Valid commands are: open file [filename], create new file [filename], search for [term], save, close file, find all references. Return exactly one command or "none" if no valid command is found.',
-          },
-          {
-            role: 'user',
-            content: transcription.text,
-          },
-        ],
-        temperature: 0.2,
-      });
+      this.outputChannel.appendLine(
+        `Whisper Assistant: Transcription raw: ${transcription.text}`,
+      );
 
-      const processedText = completion.choices[0].message.content;
+      // Then process through chat completion to interpret as command
+      const completion =
+        transcription.text.length > 2 &&
+        (await this.openai.chat.completions.create({
+          model: 'gpt-4o',
+          messages: [
+            {
+              role: 'system',
+              content: 'Convert input to VS Code commands.',
+            },
+            {
+              role: 'user',
+              content: transcription.text,
+            },
+          ],
+          functions: [
+            {
+              name: 'executeVSCodeCommand',
+              description:
+                'Execute a VS Code command with optional arguments,default to quickOpen with the transcription if nothing else fits',
+              parameters: {
+                type: 'object',
+                properties: {
+                  command: {
+                    type: 'string',
+                    enum: [
+                      'workbench.action.quickOpen',
+                      'workbench.action.files.newUntitledFile',
+                      'workbench.action.files.save',
+                      'workbench.action.closeActiveEditor',
+                      'workbench.action.findInFiles',
+                      'references-view.findReferences',
+                    ],
+                    description: 'The VS Code command to execute',
+                  },
+                  args: {
+                    type: 'object',
+                    properties: {
+                      filename: { type: 'string' },
+                      searchTerm: { type: 'string' },
+                    },
+                    description: 'Optional arguments for the command',
+                  },
+                },
+                required: ['command'],
+              },
+            },
+          ],
+          function_call: { name: 'executeVSCodeCommand' },
+          temperature: 0.2,
+        }));
+
+      const functionCall = completion?.choices[0]?.message?.function_call;
+      let processedText = 'none';
+      let commandObject = { command: '', args: [] };
+
+      if (functionCall?.arguments) {
+        try {
+          const args = JSON.parse(functionCall.arguments);
+          processedText = `${args.command}${
+            args.args ? ` ${JSON.stringify(args.args)}` : ''
+          }`;
+          commandObject = {
+            command: args.command,
+            args: [args.args?.filename, args.args?.searchTerm].filter(Boolean),
+          };
+        } catch (error) {
+          this.outputChannel.appendLine(
+            `Whisper Assistant: Error parsing function arguments: ${error}`,
+          );
+        }
+      }
 
       // Convert response to our Transcription interface
       const result: Transcription = {
@@ -188,12 +251,23 @@ class SpeechTranscription {
       };
 
       // Process the transcription to map to VS Code commands
-      const command = this.mapToVSCodeCommand(result.text);
-      if (command) {
-        await vscode.commands.executeCommand(command.command, ...command.args);
-        this.outputChannel.appendLine(
-          `Whisper Assistant: Executed command ${command.command}`,
-        );
+
+      if (commandObject.command) {
+        try {
+          this.outputChannel.appendLine(
+            `Whisper Assistant: Executing command ${
+              commandObject.command
+            } with args: ${JSON.stringify(commandObject.args)}`,
+          );
+          await vscode.commands.executeCommand(
+            commandObject.command,
+            ...commandObject.args,
+          );
+        } catch (error) {
+          this.outputChannel.appendLine(
+            `Whisper Assistant: Error executing command: ${error}`,
+          );
+        }
       }
 
       // Save transcription to storage path
@@ -227,103 +301,6 @@ class SpeechTranscription {
 
       vscode.window.showErrorMessage(`Whisper Assistant: ${errorMessage}`);
       return undefined;
-    }
-  }
-
-  private mapToVSCodeCommand(
-    text: string,
-  ): { command: string; args: any[] } | undefined {
-    // Convert text to lowercase for easier matching but keep original text for args
-    const normalizedText = text.toLowerCase();
-
-    // More sophisticated command mappings with argument parsing
-    const commandMappings: Array<{
-      phrase: string;
-      command: string;
-      parseArgs?: (text: string) => any[];
-    }> = [
-      {
-        phrase: 'open file',
-        command: 'workbench.action.quickOpen',
-        parseArgs: (text: string) => {
-          // Extract filename after "open file"
-          const match = text.match(/open file\s+(.+?)(?:\s|$)/i);
-          return match ? [match[1]] : [];
-        },
-      },
-      {
-        phrase: 'create new file',
-        command: 'workbench.action.files.newUntitledFile',
-        parseArgs: (text: string) => {
-          // Extract filename after "create new file"
-          const match = text.match(/create new file\s+(.+?)(?:\s|$)/i);
-          return match ? [match[1]] : [];
-        },
-      },
-      {
-        phrase: 'save',
-        command: 'workbench.action.files.save',
-        parseArgs: () => [],
-      },
-      {
-        phrase: 'close file',
-        command: 'workbench.action.closeActiveEditor',
-        parseArgs: () => [],
-      },
-      {
-        phrase: 'search for',
-        command: 'workbench.action.findInFiles',
-        parseArgs: (text: string) => {
-          // Extract search term after "search for"
-          const match = text.match(/search for\s+(.+?)(?:\s|$)/i);
-          return match ? [{ queryText: match[1] }] : [];
-        },
-      },
-      {
-        phrase: 'find all references',
-        command: 'references-view.findReferences',
-        parseArgs: () => [], // No additional arguments needed
-      },
-    ];
-
-    // Find matching command and parse its arguments
-    for (const mapping of commandMappings) {
-      if (normalizedText.includes(mapping.phrase)) {
-        const args = mapping.parseArgs ? mapping.parseArgs(text) : [];
-        this.outputChannel.appendLine(
-          `Whisper Assistant: Matched command "${
-            mapping.command
-          }" with args: ${JSON.stringify(args)}`,
-        );
-        return {
-          command: mapping.command,
-          args: args,
-        };
-      }
-    }
-
-    // If no command matched, log it
-    this.outputChannel.appendLine(
-      `Whisper Assistant: No command mapping found for "${text}"`,
-    );
-    return undefined;
-  }
-
-  deleteFiles(): void {
-    try {
-      const wavFile = path.join(this.tempDir, `${this.fileName}.wav`);
-      const jsonFile = path.join(this.tempDir, `${this.fileName}.json`);
-
-      if (fs.existsSync(wavFile)) {
-        fs.unlinkSync(wavFile);
-      }
-      if (fs.existsSync(jsonFile)) {
-        fs.unlinkSync(jsonFile);
-      }
-    } catch (error) {
-      this.outputChannel.appendLine(
-        `Whisper Assistant: Error deleting files: ${error}`,
-      );
     }
   }
 
