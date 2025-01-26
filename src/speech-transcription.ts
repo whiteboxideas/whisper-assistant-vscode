@@ -144,17 +144,25 @@ class SpeechTranscription {
 
       const model = PROVIDER_MODELS[provider];
 
-      this.outputChannel.appendLine(
-        `Whisper Assistant: Using model ${model} for ${provider}`,
-      );
-
+      // Add a prompt to guide the model towards command-like responses
       const transcription = await this.openai.audio.transcriptions.create({
         file: audioFile,
         model: model,
         language: 'en',
-        // eslint-disable-next-line @typescript-eslint/naming-convention
         response_format: 'verbose_json',
+        prompt:
+          "Convert voice commands to VS Code actions. Expected format: 'open file [filename]', 'create new file [filename]', 'search for [term]', 'save', 'close file'",
+        temperature: 0.2,
       });
+
+      // Process the transcription to map to VS Code commands
+      const command = this.mapToVSCodeCommand(transcription.text);
+      if (command) {
+        await vscode.commands.executeCommand(command.command, ...command.args);
+        this.outputChannel.appendLine(
+          `Whisper Assistant: Executed command ${command.command}`,
+        );
+      }
 
       // Convert response to our Transcription interface
       const result: Transcription = {
@@ -204,6 +212,80 @@ class SpeechTranscription {
       vscode.window.showErrorMessage(`Whisper Assistant: ${errorMessage}`);
       return undefined;
     }
+  }
+
+  private mapToVSCodeCommand(
+    text: string,
+  ): { command: string; args: any[] } | undefined {
+    // Convert text to lowercase for easier matching but keep original text for args
+    const normalizedText = text.toLowerCase();
+
+    // More sophisticated command mappings with argument parsing
+    const commandMappings: Array<{
+      phrase: string;
+      command: string;
+      parseArgs?: (text: string) => any[];
+    }> = [
+      {
+        phrase: 'open file',
+        command: 'workbench.action.quickOpen',
+        parseArgs: (text: string) => {
+          // Extract filename after "open file"
+          const match = text.match(/open file\s+(.+?)(?:\s|$)/i);
+          return match ? [match[1]] : [];
+        },
+      },
+      {
+        phrase: 'create new file',
+        command: 'workbench.action.files.newUntitledFile',
+        parseArgs: (text: string) => {
+          // Extract filename after "create new file"
+          const match = text.match(/create new file\s+(.+?)(?:\s|$)/i);
+          return match ? [match[1]] : [];
+        },
+      },
+      {
+        phrase: 'save',
+        command: 'workbench.action.files.save',
+        parseArgs: () => [],
+      },
+      {
+        phrase: 'close file',
+        command: 'workbench.action.closeActiveEditor',
+        parseArgs: () => [],
+      },
+      {
+        phrase: 'search for',
+        command: 'workbench.action.findInFiles',
+        parseArgs: (text: string) => {
+          // Extract search term after "search for"
+          const match = text.match(/search for\s+(.+?)(?:\s|$)/i);
+          return match ? [{ queryText: match[1] }] : [];
+        },
+      },
+    ];
+
+    // Find matching command and parse its arguments
+    for (const mapping of commandMappings) {
+      if (normalizedText.includes(mapping.phrase)) {
+        const args = mapping.parseArgs ? mapping.parseArgs(text) : [];
+        this.outputChannel.appendLine(
+          `Whisper Assistant: Matched command "${
+            mapping.command
+          }" with args: ${JSON.stringify(args)}`,
+        );
+        return {
+          command: mapping.command,
+          args: args,
+        };
+      }
+    }
+
+    // If no command matched, log it
+    this.outputChannel.appendLine(
+      `Whisper Assistant: No command mapping found for "${text}"`,
+    );
+    return undefined;
   }
 
   deleteFiles(): void {
