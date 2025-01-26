@@ -144,29 +144,36 @@ class SpeechTranscription {
 
       const model = PROVIDER_MODELS[provider];
 
-      // Add a prompt to guide the model towards command-like responses
+      // First get raw transcription
       const transcription = await this.openai.audio.transcriptions.create({
         file: audioFile,
         model: model,
         language: 'en',
         response_format: 'verbose_json',
-        prompt:
-          "Convert voice commands to VS Code actions. Expected format: 'open file [filename]', 'create new file [filename]', 'search for [term]', 'save', 'close file'",
+      });
+
+      // Then process through chat completion to interpret as command
+      const completion = await this.openai.chat.completions.create({
+        model: 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'system',
+            content:
+              'Convert voice input to VS Code commands. Valid commands are: open file [filename], create new file [filename], search for [term], save, close file, find all references. Return exactly one command or "none" if no valid command is found.',
+          },
+          {
+            role: 'user',
+            content: transcription.text,
+          },
+        ],
         temperature: 0.2,
       });
 
-      // Process the transcription to map to VS Code commands
-      const command = this.mapToVSCodeCommand(transcription.text);
-      if (command) {
-        await vscode.commands.executeCommand(command.command, ...command.args);
-        this.outputChannel.appendLine(
-          `Whisper Assistant: Executed command ${command.command}`,
-        );
-      }
+      const processedText = completion.choices[0].message.content;
 
       // Convert response to our Transcription interface
       const result: Transcription = {
-        text: transcription.text,
+        text: processedText,
         segments:
           transcription.segments?.map((seg) => ({
             id: seg.id,
@@ -179,6 +186,15 @@ class SpeechTranscription {
           })) ?? [],
         language: transcription.language,
       };
+
+      // Process the transcription to map to VS Code commands
+      const command = this.mapToVSCodeCommand(result.text);
+      if (command) {
+        await vscode.commands.executeCommand(command.command, ...command.args);
+        this.outputChannel.appendLine(
+          `Whisper Assistant: Executed command ${command.command}`,
+        );
+      }
 
       // Save transcription to storage path
       await fs.promises.writeFile(
@@ -262,6 +278,11 @@ class SpeechTranscription {
           const match = text.match(/search for\s+(.+?)(?:\s|$)/i);
           return match ? [{ queryText: match[1] }] : [];
         },
+      },
+      {
+        phrase: 'find all references',
+        command: 'references-view.findReferences',
+        parseArgs: () => [], // No additional arguments needed
       },
     ];
 
