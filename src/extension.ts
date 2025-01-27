@@ -147,9 +147,9 @@ export async function toggleRecordingCommand(): Promise<void> {
 
               if (transcription) {
                 await vscode.env.clipboard.writeText(transcription.text);
-                await vscode.commands.executeCommand(
-                  'editor.action.clipboardPasteAction',
-                );
+                // await vscode.commands.executeCommand(
+                //   'editor.action.clipboardPasteAction',
+                // );
               }
             }
           } catch (error) {

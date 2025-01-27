@@ -4,6 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { promisify } from 'util';
 import OpenAI from 'openai';
+import { CommandMapper } from './command-mapper';
 
 const execAsync = promisify(exec);
 
@@ -43,6 +44,7 @@ class SpeechTranscription {
   private recordingProcess: ChildProcess | null = null;
   private openai: OpenAI;
   private tempDir: string;
+  private commandMapper: CommandMapper;
 
   constructor(
     private storagePath: string,
@@ -50,6 +52,7 @@ class SpeechTranscription {
   ) {
     const config = this.getApiConfig();
     this.openai = new OpenAI(config);
+    this.commandMapper = new CommandMapper(config);
 
     // Create a temp directory within the storage path
     this.tempDir = path.join(this.storagePath, 'temp');
@@ -184,6 +187,14 @@ class SpeechTranscription {
 
       if (result?.text?.length === 0) {
         return undefined;
+      }
+
+      // Map transcription to VS Code command and execute it
+      const commandMapping = await this.commandMapper.mapTranscriptionToCommand(
+        result,
+      );
+      if (commandMapping) {
+        await this.commandMapper.executeCommand(commandMapping);
       }
 
       return result;
