@@ -190,13 +190,18 @@ class SpeechTranscription {
       }
 
       // Map transcription to VS Code command and execute it
-      const commandMapping = await this.commandMapper.mapTranscriptionToCommand(
-        result,
-      );
+      // const commandMapping = await this.commandMapper.mapTranscriptionToCommand(
+      //   result,
+      // );
+      // if (commandMapping) {
+      //   await this.commandMapper.executeCommand(commandMapping);
+      // }
+
+      const commandMapping =
+        await this.commandMapper.mapTranscriptionToCommandViaTools(result);
       if (commandMapping) {
         await this.commandMapper.executeCommand(commandMapping);
       }
-
       return result;
     } catch (error) {
       // Log the error to output channel
