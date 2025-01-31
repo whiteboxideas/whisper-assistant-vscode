@@ -57,6 +57,16 @@
           "type": "string",
           "default": "http://localhost:4444",
           "description": "Custom endpoint URL (used for localhost)"
+        },
+        "whisper-assistant.recordingState": {
+          "type": "string",
+          "default": "testing",
+          "enum": [
+            "regular",
+            "testing",
+            "new-recording"
+          ],
+          "description": "Controls how recordings are handled: regular (new & delete), testing (use existing), new-recording (overwrite existing)"
         }
       }
     }

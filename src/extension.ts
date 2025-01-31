@@ -104,14 +104,71 @@ function registerCommands(context: vscode.ExtensionContext): void {
 
 export async function toggleRecordingCommand(): Promise<void> {
   if (state.speechTranscription !== undefined && !state.isTranscribing) {
+    const config = vscode.workspace.getConfiguration('whisper-assistant');
+    const recordingState = config.get('recordingState') || 'testing';
+
     if (!state.isRecording) {
       state.speechTranscription.startRecording();
       state.recordingStartTime = Date.now();
       state.isRecording = true;
       updateStatusBarItem();
 
-      setInterval(updateStatusBarItem, 1000);
-    } else {
+      if (recordingState === 'testing') {
+        // In testing mode, immediately proceed with transcription
+        state.isRecording = false;
+        state.isTranscribing = true;
+        updateStatusBarItem();
+
+        const progressOptions = {
+          location: vscode.ProgressLocation.Notification,
+          cancellable: false,
+          title: 'Transcribing using Test Recording',
+        };
+
+        try {
+          await vscode.window.withProgress(
+            progressOptions,
+            async (progress) => {
+              const incrementData = initializeIncrementData();
+              const interval = startProgressInterval(
+                progress,
+                incrementData,
+                'Processing test recording',
+              );
+
+              try {
+                if (state.speechTranscription !== undefined) {
+                  const transcription: Transcription | undefined =
+                    await state.speechTranscription.transcribeRecording();
+
+                  if (transcription) {
+                    await vscode.env.clipboard.writeText(transcription.text);
+                  }
+                }
+              } catch (error) {
+                progress.report({
+                  increment: 0,
+                  message: 'Transcription failed',
+                });
+                throw error;
+              }
+
+              await finalizeProgress(progress, interval, incrementData);
+            },
+          );
+        } catch (error) {
+          if (state.myStatusBarItem) {
+            state.myStatusBarItem.text = '$(error) Transcription failed';
+            setTimeout(() => updateStatusBarItem(), 3000);
+          }
+        } finally {
+          state.isTranscribing = false;
+          state.recordingStartTime = undefined;
+          updateStatusBarItem();
+        }
+      }
+    } else if (recordingState !== 'testing') {
+      // Only handle stop recording for non-testing modes
       await state.speechTranscription.stopRecording();
       state.isTranscribing = true;
       state.isRecording = false;
@@ -119,7 +176,6 @@ export async function toggleRecordingCommand(): Promise<void> {
       updateStatusBarItem();
 
       // Get the current API provider
-      const config = vscode.workspace.getConfiguration('whisper-assistant');
       const provider = config.get<string>('apiProvider') || 'openai';
       const message = `Transcribing using ${
         provider.charAt(0).toUpperCase() + provider.slice(1)
@@ -169,9 +225,9 @@ export async function toggleRecordingCommand(): Promise<void> {
           setTimeout(() => updateStatusBarItem(), 3000);
         }
       } finally {
-        // Always cleanup, even if there was an error
+        // Always cleanup, but preserve the files
         if (state.speechTranscription !== undefined) {
-          state.speechTranscription.deleteFiles();
+          state.speechTranscription.deleteFiles(true);
         }
         state.isTranscribing = false;
         state.recordingStartTime = undefined;

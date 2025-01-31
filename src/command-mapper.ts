@@ -9,11 +9,20 @@ export interface CommandMapping {
   };
 }
 
+type RecordingState = 'regular' | 'testing' | 'new-recording';
+
 export class CommandMapper {
   private openai: OpenAI;
+  private recordingState: RecordingState;
 
   constructor(config: { apiKey: string; baseURL: string }) {
     this.openai = new OpenAI(config);
+    const vscodeConfig = vscode.workspace.getConfiguration('whisper-assistant');
+    this.recordingState = vscodeConfig.get('recordingState') || 'testing';
+  }
+
+  getRecordingState(): RecordingState {
+    return this.recordingState;
   }
 
   async executeCommand(mapping: CommandMapping): Promise<void> {

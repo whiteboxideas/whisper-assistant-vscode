@@ -98,6 +98,14 @@ class SpeechTranscription {
 
   startRecording(): void {
     try {
+      if (this.commandMapper.getRecordingState() === 'testing') {
+        this.outputChannel.appendLine(
+          'Whisper Assistant: Testing mode - using existing recording',
+        );
+        // In testing mode, we don't need to start actual recording
+        return;
+      }
+
       const outputPath = path.join(this.tempDir, `${this.fileName}.wav`);
       this.recordingProcess = exec(
         `sox -d -b 16 -e signed -c 1 -r 16k "${outputPath}"`,
@@ -215,6 +223,23 @@ class SpeechTranscription {
   }
 
   deleteFiles(): void {
+    const recordingState = this.commandMapper.getRecordingState();
+
+    if (recordingState === 'testing') {
+      this.outputChannel.appendLine(
+        'Whisper Assistant: Testing mode - preserving test recording',
+      );
+      return;
+    }
+
+    if (recordingState === 'new-recording') {
+      this.outputChannel.appendLine(
+        'Whisper Assistant: New recording mode - preserving latest recording',
+      );
+      return;
+    }
+
+    // Regular mode - proceed with deletion
     try {
       const wavFile = path.join(this.tempDir, `${this.fileName}.wav`);
       const jsonFile = path.join(this.tempDir, `${this.fileName}.json`);
@@ -224,6 +249,9 @@ class SpeechTranscription {
       }
       if (fs.existsSync(jsonFile)) {
         fs.unlinkSync(jsonFile);
+      }
+      if (fs.existsSync(this.tempDir)) {
+        fs.rmSync(this.tempDir, { recursive: true, force: true });
       }
     } catch (error) {
       this.outputChannel.appendLine(
@@ -235,9 +263,9 @@ class SpeechTranscription {
   // Add cleanup method for extension deactivation
   cleanup(): void {
     try {
-      if (fs.existsSync(this.tempDir)) {
-        fs.rmSync(this.tempDir, { recursive: true, force: true });
-      }
+      // if (fs.existsSync(this.tempDir)) {
+      //   fs.rmSync(this.tempDir, { recursive: true, force: true });
+      // }
     } catch (error) {
       this.outputChannel.appendLine(
         `Whisper Assistant: Error cleaning up: ${error}`,
